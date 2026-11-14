@@ -25,15 +25,15 @@ ADMIN_IDS = [7450045362, 1240436673]
 bot = Bot(token=TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
 
-# Обычный словарь вместо обращения через dp
 active_takes = {}
 
 TAG_MAP = {
+    "help": "#хелп",
+    "question": "#вопрос",
     "hate": "#хейт",
     "gossip": "#сплетни",
-    "confess": "#признание",
-    "question": "#вопрос",
-    "search": "#поиск",
+    "assist": "#помощь",
+    "dating": "#знакомства",
 }
 
 main_kb = ReplyKeyboardMarkup(
@@ -76,7 +76,7 @@ async def process_take(message: Message, state: FSMContext):
         )
         return
 
-    unique_key = f"{message.chat.id}_{message.message_id}"
+    unique_key = f"{message.chat.id}:{message.message_id}"
     active_takes[unique_key] = {
         "text": text or "",
         "photo_id": photo_id,
@@ -87,6 +87,14 @@ async def process_take(message: Message, state: FSMContext):
         inline_keyboard=[
             [
                 InlineKeyboardButton(
+                    text="#хелп", callback_data=f"tag_{unique_key}_help"
+                ),
+                InlineKeyboardButton(
+                    text="#вопрос", callback_data=f"tag_{unique_key}_question"
+                ),
+            ],
+            [
+                InlineKeyboardButton(
                     text="#хейт", callback_data=f"tag_{unique_key}_hate"
                 ),
                 InlineKeyboardButton(
@@ -95,22 +103,17 @@ async def process_take(message: Message, state: FSMContext):
             ],
             [
                 InlineKeyboardButton(
-                    text="#признание", callback_data=f"tag_{unique_key}_confess"
+                    text="#помощь", callback_data=f"tag_{unique_key}_assist"
                 ),
                 InlineKeyboardButton(
-                    text="#вопрос", callback_data=f"tag_{unique_key}_question"
-                ),
-            ],
-            [
-                InlineKeyboardButton(
-                    text="#поиск", callback_data=f"tag_{unique_key}_search"
+                    text="#знакомства", callback_data=f"tag_{unique_key}_dating"
                 ),
             ],
         ]
     )
 
     await message.answer(
-        "Выбери хэштег для поста:",
+        "🏷 Выберите тег для анкеты:",
         reply_markup=hashtag_kb,
     )
 
