@@ -10,14 +10,14 @@ from aiogram.types import (
     CallbackQuery,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
+    KeyboardButton,
     Message,
+    ReplyKeyboardMarkup,
 )
 from aiohttp import web
 
-# Логирование
 logging.basicConfig(level=logging.INFO)
 
-# Конфигурация
 TOKEN = "9041678651:AAH1cHSxew0eHjB_QGRAoP10bggMMKSq4HY"
 CHANNEL_ID = -1004260251593
 ADMIN_IDS = [7450045362, 1240436673]
@@ -25,36 +25,111 @@ ADMIN_IDS = [7450045362, 1240436673]
 bot = Bot(token=TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
 
-# Надежное хранилище активных тейков
-if "active_takes" not in dp:
-    dp["active_takes"] = {}
+# Обычный словарь вместо обращения через dp
+active_takes = {}
+
+TAG_MAP = {
+    "hate": "#хейт",
+    "gossip": "#сплетни",
+    "confess": "#признание",
+    "question": "#вопрос",
+    "search": "#поиск",
+}
+
+main_kb = ReplyKeyboardMarkup(
+    keyboard=[[KeyboardButton(text="💬 Отправить тейк")]],
+    resize_keyboard=True,
+)
 
 
 class Form(StatesGroup):
     waiting_for_take = State()
 
 
-# Команда /start запускает диалог
 @dp.message(Command("start"))
 async def cmd_start(message: Message, state: FSMContext):
     await state.set_state(Form.waiting_for_take)
     await message.answer(
-        "Привет! Отправь мне свой тейк (признание/мысль), и я отправлю его на модерацию админам."
+        "Привет! Нажми «💬 Отправить тейк» или просто напиши свой текст (можно"
+        " с фото) ниже:",
+        reply_markup=main_kb,
     )
 
 
-# Прием тейка от пользователя (состояние не сбрасывается для отправки подряд)
+@dp.message(F.text == "💬 Отправить тейк")
+async def btn_send_take(message: Message, state: FSMContext):
+    await state.set_state(Form.waiting_for_take)
+    await message.answer(
+        "Отправь свой тейк (текст или фото с подписью):",
+        reply_markup=main_kb,
+    )
+
+
 @dp.message(Form.waiting_for_take)
 async def process_take(message: Message, state: FSMContext):
-    if not message.text:
-        await message.answer("Пожалуйста, отправь текстовое сообщение.")
+    text = message.text or message.caption
+    photo_id = message.photo[-1].file_id if message.photo else None
+
+    if not text and not photo_id:
+        await message.answer(
+            "Отправь текстовое сообщение или фото с подписью."
+        )
         return
 
-    take_text = message.text
-    unique_key = f"take_{message.chat.id}_{message.message_id}"
-    dp["active_takes"][unique_key] = take_text
+    unique_key = f"{message.chat.id}_{message.message_id}"
+    active_takes[unique_key] = {
+        "text": text or "",
+        "photo_id": photo_id,
+        "hashtag": "#хейт",
+    }
 
-    kb = InlineKeyboardMarkup(
+    hashtag_kb = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="#хейт", callback_data=f"tag_{unique_key}_hate"
+                ),
+                InlineKeyboardButton(
+                    text="#сплетни", callback_data=f"tag_{unique_key}_gossip"
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text="#признание", callback_data=f"tag_{unique_key}_confess"
+                ),
+                InlineKeyboardButton(
+                    text="#вопрос", callback_data=f"tag_{unique_key}_question"
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text="#поиск", callback_data=f"tag_{unique_key}_search"
+                ),
+            ],
+        ]
+    )
+
+    await message.answer(
+        "Выбери хэштег для поста:",
+        reply_markup=hashtag_kb,
+    )
+
+
+@dp.callback_query(F.data.startswith("tag_"))
+async def process_hashtag(callback: CallbackQuery, state: FSMContext):
+    _, unique_key, tag_code = callback.data.split("_", 2)
+    take_item = active_takes.get(unique_key)
+
+    if not take_item:
+        await callback.answer(
+            "Этот тейк устарел, отправь заново.", show_alert=True
+        )
+        return
+
+    hashtag = TAG_MAP.get(tag_code, "#хейт")
+    take_item["hashtag"] = hashtag
+
+    mod_kb = InlineKeyboardMarkup(
         inline_keyboard=[
             [
                 InlineKeyboardButton(
@@ -67,75 +142,91 @@ async def process_take(message: Message, state: FSMContext):
         ]
     )
 
+    preview_text = (
+        f"Новый тейк ({hashtag}):\n\n{take_item['text']}"
+        if take_item["text"]
+        else f"Новый тейк ({hashtag}) [Фото]"
+    )
+
     for admin_id in ADMIN_IDS:
         try:
-            await bot.send_message(
-                chat_id=admin_id,
-                text=f"Новый анонимный тейк на модерацию:\n\n{take_text}",
-                reply_markup=kb,
-            )
+            if take_item["photo_id"]:
+                await bot.send_photo(
+                    chat_id=admin_id,
+                    photo=take_item["photo_id"],
+                    caption=preview_text,
+                    reply_markup=mod_kb,
+                )
+            else:
+                await bot.send_message(
+                    chat_id=admin_id,
+                    text=preview_text,
+                    reply_markup=mod_kb,
+                )
         except Exception as e:
             logging.error(f"Не удалось отправить админу {admin_id}: {e}")
 
-    await message.answer(
-        "Твой тейк отправлен на модерацию! Ожидай публикации."
+    await callback.message.edit_text(
+        f"Тейк с хэштегом {hashtag} отправлен на модерацию!"
     )
+    await callback.answer()
+    await state.set_state(Form.waiting_for_take)
 
 
-# Модерация администраторами
 @dp.callback_query(F.data.startswith(("appr_", "decl_")))
 async def process_moderation(callback: CallbackQuery):
     action, unique_key = callback.data.split("_", 1)
-    action_type = "approve" if action == "appr" else "decline"
+    take_item = active_takes.pop(unique_key, None)
 
-    take_text = dp["active_takes"].pop(unique_key, None)
-
-    if not take_text:
+    if not take_item:
         await callback.answer(
             "Этот тейк уже обработан или устарел!", show_alert=True
         )
         return
 
-    if action_type == "approve":
+    if action == "appr":
         try:
-            # Формат поста: текст + подпись
-            post_text = f"{take_text}\n\nПредложка | Переходник\n#хейт"
+            body = f"{take_item['text']}\n\n" if take_item["text"] else ""
+            post_text = f"{body}Предложка | Переходник\n{take_item['hashtag']}"
 
-            # Инлайн-кнопки под постом с валидными ссылками-заглушками
-            channel_kb = InlineKeyboardMarkup(
-                inline_keyboard=[
-                    [
-                        InlineKeyboardButton(
-                            text="💬 Предложка", url="https://t.me/BotFather"
-                        ),
-                        InlineKeyboardButton(
-                            text="#хейт", url="https://t.me/telegram"
-                        ),
-                    ]
-                ]
-            )
+            if take_item["photo_id"]:
+                await bot.send_photo(
+                    chat_id=CHANNEL_ID,
+                    photo=take_item["photo_id"],
+                    caption=post_text,
+                )
+            else:
+                await bot.send_message(
+                    chat_id=CHANNEL_ID,
+                    text=post_text,
+                )
 
-            await bot.send_message(
-                chat_id=CHANNEL_ID,
-                text=post_text,
-                reply_markup=channel_kb,
-            )
-            await callback.answer("Тейк успешно опубликован в канале!")
-            await callback.message.edit_text(
-                f"{callback.message.text}\n\n✅ *Опубликовано*",
-                parse_mode="Markdown",
-            )
+            await callback.answer("Опубликовано в канале!")
+            status_line = "\n\n✅ Опубликовано"
+            if callback.message.photo:
+                await callback.message.edit_caption(
+                    caption=f"{callback.message.caption or ''}{status_line}"
+                )
+            else:
+                await callback.message.edit_text(
+                    text=f"{callback.message.text or ''}{status_line}"
+                )
         except Exception as e:
             await callback.answer(f"Ошибка публикации: {e}", show_alert=True)
             logging.error(f"Ошибка отправки в канал: {e}")
     else:
         await callback.answer("Тейк отклонен.")
-        await callback.message.edit_text(
-            f"{callback.message.text}\n\n❌ *Отклонено*", parse_mode="Markdown"
-        )
+        status_line = "\n\n❌ Отклонено"
+        if callback.message.photo:
+            await callback.message.edit_caption(
+                caption=f"{callback.message.caption or ''}{status_line}"
+            )
+        else:
+            await callback.message.edit_text(
+                text=f"{callback.message.text or ''}{status_line}"
+            )
 
 
-# Веб-сервер для Render (удерживает Web Service в статусе Live)
 async def handle(request):
     return web.Response(text="Bot is alive!")
 
