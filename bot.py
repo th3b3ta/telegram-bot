@@ -18,7 +18,7 @@ from aiohttp import web  # Импортируем веб-сервер для д�
 logging.basicConfig(level=logging.INFO)
 
 # Твои данные бота и чатов
-TOKEN = "7724128913:AAEM698pU8k4y3iV3wXN2aVzR9c7bL1K68w"
+TOKEN = "9041678651:AAH1cHSxew0eHjB_QGRAoP10bggMMKSq4HY"
 CHANNEL_ID = -1004260251593
 ADMIN_IDS = [7450045362, 1240436673]
 
