@@ -43,7 +43,7 @@ async def cmd_start(message: Message, state: FSMContext):
     )
 
 
-# Прием тейка от пользователя (состояние не сбрасывается, чтобы можно было писать подряд)
+# Прием тейка от пользователя (состояние не сбрасывается для отправки подряд)
 @dp.message(Form.waiting_for_take)
 async def process_take(message: Message, state: FSMContext):
     if not message.text:
@@ -98,18 +98,18 @@ async def process_moderation(callback: CallbackQuery):
 
     if action_type == "approve":
         try:
-            # Точный формат поста: текст + подпись
+            # Формат поста: текст + подпись
             post_text = f"{take_text}\n\nПредложка | Переходник\n#хейт"
 
-            # Инлайн-кнопки под постом в канале (ссылки чистые, без пробелов)
+            # Инлайн-кнопки под постом с валидными ссылками-заглушками
             channel_kb = InlineKeyboardMarkup(
                 inline_keyboard=[
                     [
                         InlineKeyboardButton(
-                            text="💬 Предложка", url="https://t.me/"
+                            text="💬 Предложка", url="https://t.me/BotFather"
                         ),
                         InlineKeyboardButton(
-                            text="#хейт", url="https://t.me/"
+                            text="#хейт", url="https://t.me/telegram"
                         ),
                     ]
                 ]
