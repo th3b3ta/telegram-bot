@@ -110,7 +110,6 @@ async def process_take(message: Message, state: FSMContext):
         )
         return
 
-    # Сразу сбрасываем состояние, чтобы следующий тейк снова требовал нажатия кнопки
     await state.clear()
 
     unique_key = f"{message.chat.id}:{message.message_id}"
@@ -157,7 +156,6 @@ async def process_take(message: Message, state: FSMContext):
     )
 
 
-# Любые сообщения без нажатия кнопки «💬 Отправить тейк» игнорируются с подсказкой
 @dp.message()
 async def fallback_message(message: Message):
     await message.answer(
@@ -211,4 +209,163 @@ async def process_hashtag(callback: CallbackQuery):
         try:
             if take_item["photo_id"]:
                 sent = await bot.send_photo(
-                    chat_id=admin_id,
+                    admin_id,
+                    take_item["photo_id"],
+                    caption=preview_text,
+                    reply_markup=mod_kb,
+                )
+            else:
+                sent = await bot.send_message(
+                    admin_id, preview_text, reply_markup=mod_kb
+                )
+            admin_messages.append([admin_id, sent.message_id])
+        except Exception as e:
+            logging.error(f"Не удалось отправить админу {admin_id}: {e}")
+
+    take_item["admin_messages"] = admin_messages
+    save_db()
+
+    await callback.message.edit_text(
+        f"Тейк с хэштегом {hashtag} отправлен на модерацию!"
+    )
+    await callback.answer()
+
+
+def extract_from_message(msg: Message) -> dict:
+    raw = msg.caption or msg.text or ""
+    photo_id = msg.photo[-1].file_id if msg.photo else None
+    match = re.match(r"^Новый тейк \((#[^\)]+)\):(?:\n\n(.*))?$", raw, re.S)
+    if match:
+        hashtag = match.group(1)
+        text = (match.group(2) or "").strip()
+    else:
+        hashtag = "#хейт"
+        text = raw.strip()
+    return {
+        "text": text,
+        "photo_id": photo_id,
+        "hashtag": hashtag,
+        "admin_messages": [],
+    }
+
+
+@dp.callback_query(F.data.startswith(("appr_", "decl_")))
+async def process_moderation(callback: CallbackQuery):
+    action, unique_key = callback.data.split("_", 1)
+
+    if unique_key in processed_takes:
+        await callback.answer(
+            "Этот тейк уже обработан другим администратором!", show_alert=True
+        )
+        try:
+            await callback.message.edit_reply_markup(reply_markup=None)
+        except Exception:
+            pass
+        return
+
+    processed_takes.add(unique_key)
+    take_item = active_takes.pop(unique_key, None)
+
+    if not take_item:
+        take_item = extract_from_message(callback.message)
+
+    save_db()
+
+    admin_name = (
+        f"@{callback.from_user.username}"
+        if callback.from_user.username
+        else callback.from_user.full_name
+    )
+
+    if action == "appr":
+        try:
+            escaped_text = (
+                html.escape(take_item["text"]) if take_item["text"] else ""
+            )
+            body = f"{escaped_text}\n\n" if escaped_text else ""
+            footer = (
+                f'<a href="{BOT_URL}">Предложка</a> | '
+                f'<a href="{PEREHODNIK_URL}">Переходник</a>\n'
+                f"{take_item['hashtag']}"
+            )
+            post_text = f"{body}{footer}"
+
+            if take_item["photo_id"]:
+                await bot.send_photo(
+                    CHANNEL_ID,
+                    take_item["photo_id"],
+                    caption=post_text,
+                    parse_mode="HTML",
+                )
+            else:
+                await bot.send_message(
+                    CHANNEL_ID,
+                    post_text,
+                    parse_mode="HTML",
+                    disable_web_page_preview=True,
+                )
+
+            await callback.answer("Опубликовано в канале!")
+            status_line = f"\n\n✅ Одобрено ({admin_name})"
+        except Exception as e:
+            processed_takes.discard(unique_key)
+            save_db()
+            await callback.answer(f"Ошибка публикации: {e}", show_alert=True)
+            logging.error(f"Ошибка отправки в канал: {e}")
+            return
+    else:
+        await callback.answer("Тейк отклонен.")
+        status_line = f"\n\n❌ Отклонено ({admin_name})"
+
+    base_text = callback.message.caption or callback.message.text or ""
+    updated_text = f"{base_text}{status_line}"
+
+    targets = take_item.get("admin_messages") or [
+        [callback.message.chat.id, callback.message.message_id]
+    ]
+
+    for chat_id, msg_id in targets:
+        try:
+            if take_item["photo_id"] or callback.message.photo:
+                await bot.edit_message_caption(
+                    chat_id=chat_id,
+                    message_id=msg_id,
+                    caption=updated_text,
+                    reply_markup=None,
+                )
+            else:
+                await bot.edit_message_text(
+                    chat_id=chat_id,
+                    message_id=msg_id,
+                    text=updated_text,
+                    reply_markup=None,
+                )
+        except Exception as e:
+            logging.error(
+                f"Не удалось обновить сообщение у админа {chat_id}: {e}"
+            )
+
+
+async def handle(request):
+    return web.Response(text="Bot is alive!")
+
+
+async def web_server():
+    app = web.Application()
+    app.router.add_get("/", handle)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    port = int(os.environ.get("PORT", 10000))
+    site = web.TCPSite(runner, "0.0.0.0", port)
+    await site.start()
+    logging.info(f"Web server started on port {port}")
+
+
+async def main():
+    asyncio.create_task(web_server())
+    await bot.delete_webhook(drop_pending_updates=True)
+    await dp.start_polling(bot)
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
