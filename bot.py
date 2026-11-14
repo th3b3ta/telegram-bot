@@ -12,12 +12,12 @@ from aiogram.types import (
     InlineKeyboardMarkup,
     Message,
 )
-from aiohttp import web  # Импортируем веб-сервер для дружбы с Render
+from aiohttp import web
 
-# Включаем логирование, чтобы видеть всё в консоли Render
+# Включаем логирование
 logging.basicConfig(level=logging.INFO)
 
-# Твои данные бота и чатов
+# Твои актуальные данные
 TOKEN = "9041678651:AAH1cHSxew0eHjB_QGRAoP10bggMMKSq4HY"
 CHANNEL_ID = -1004260251593
 ADMIN_IDS = [7450045362, 1240436673]
@@ -25,7 +25,7 @@ ADMIN_IDS = [7450045362, 1240436673]
 bot = Bot(token=TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
 
-# Словарь для хранения текстов тейков перед модерацией (чтобы админы не конфликтовали)
+# Хранилище текстов тейков для модерации
 takes_data = {}
 
 
@@ -43,7 +43,7 @@ async def cmd_start(message: Message, state: FSMContext):
     await state.set_state(Form.waiting_for_take)
 
 
-# Ловим текст тейка от пользователя
+# Обработка текста тейка от пользователя
 @dp.message(Form.waiting_for_take)
 async def process_take(message: Message, state: FSMContext):
     if not message.text:
@@ -70,7 +70,7 @@ async def process_take(message: Message, state: FSMContext):
         ]
     )
 
-    # Рассылаем всем админам предложение оценить тейк
+    # Рассылаем админам
     for admin_id in ADMIN_IDS:
         try:
             await bot.send_message(
@@ -87,12 +87,11 @@ async def process_take(message: Message, state: FSMContext):
     await state.clear()
 
 
-# Обработка нажатий кнопок админами (с защитой от гонки потоков)
+# Обработка нажатий кнопок админами
 @dp.callback_query(F.data.startswith(("approve_", "decline_")))
 async def process_moderation(callback: CallbackQuery):
     action, take_id = callback.data.split("_", 1)
 
-    # Безопасно забираем текст из памяти (если другой админ уже нажал кнопку, здесь будет пусто)
     take_text = takes_data.pop(take_id, None)
 
     if not take_text:
@@ -109,7 +108,6 @@ async def process_moderation(callback: CallbackQuery):
         return
 
     if action == "approve":
-        # Публикуем в канал
         try:
             await bot.send_message(
                 chat_id=CHANNEL_ID,
@@ -131,7 +129,7 @@ async def process_moderation(callback: CallbackQuery):
         )
 
 
-# --- ФИКТИВНЫЙ ВЕБ-СЕРВЕР ДЛЯ RENDER ---
+# Веб-сервер для удержания бесплатного Web Service на Render
 async def handle(request):
     return web.Response(text="Bot is alive!")
 
@@ -141,19 +139,14 @@ async def web_server():
     app.router.add_get("/", handle)
     runner = web.AppRunner(app)
     await runner.setup()
-    # Render передает порт через переменные окружения, либо используем 10000 по умолчанию
-    port = 10000
-    site = web.TCPSite(runner, "0.0.0.0", port)
+    site = web.TCPSite(runner, "0.0.0.0", 10000)
     await site.start()
-    logging.info(f"Web server started on port {port}")
+    logging.info("Web server started on port 10000")
 
 
-# Главная функция запуска всего вместе
+# Главная функция запуска
 async def main():
-    # Запускаем веб-сервер в фоновом режиме, чтобы Render видел открытый порт
     asyncio.create_task(web_server())
-
-    # Запускаем телеграм-бота
     await bot.delete_webhook(drop_pending_updates=True)
     await dp.start_polling(bot)
 
